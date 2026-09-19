@@ -1,0 +1,22 @@
+{
+	"name": "@sigworkflow/root",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@12.4.2",
+	"scripts": {
+		"core": "pnpm --filter @sigworkflow/core",
+		"lint": "biome lint"
+	},
+	"devEngines": {
+		"packageManager": {
+			"name": "pnpm",
+			"version": "12.4.2",
+			"onFail": "download"
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.14",
+		"@types/node": "^22.20.2",
+		"typescript": "catalog:"
+	}
+}

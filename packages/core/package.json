@@ -1,0 +1,22 @@
+{
+  "name": "@sigworkflow/core",
+  "version": "0.0.1",
+  "description": "A workflow engine",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.4.2",
+  "keywords": ["workflow", "engine", "sig", "typescript"],
+  "scripts": {
+    "core": "pnpm --filter @sigworkflow/core"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.4.2",
+      "onFail": "download"
+    }
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
+  }
+}
