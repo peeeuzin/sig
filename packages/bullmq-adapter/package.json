@@ -1,0 +1,39 @@
+{
+  "name": "@sigworkflow/bullmq-adapter",
+  "version": "0.0.1",
+  "description": "Sig adapter for BullMQ",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "workflow",
+    "engine",
+    "sig",
+    "typescript",
+    "adapter",
+    "bullmq"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "packageManager": "pnpm@12.4.2",
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "^5.0.1"
+  },
+  "peerDependencies": {
+    "@sigworkflow/core": "workspace:*",
+    "bullmq": "^6.3.8"
+  },
+  "dependencies": {
+    "@sigworkflow/core": "workspace:*",
+    "bullmq": "^6.3.8",
+    "ioredis": "^6.0.0"
+  }
+}

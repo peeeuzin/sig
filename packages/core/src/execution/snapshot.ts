@@ -1,11 +1,13 @@
-import type { WorkflowStatus } from "../engine/index.js";
+import type { Context } from "../context.js";
+import type { ExecutionStatus } from "./index.js";
 
-export interface ExecutionSnapshot<TContext = any> {
-	id: string;
-	workflowName: string;
-	workflowVersion: number;
-	status: WorkflowStatus;
-	currentStep: string | null;
-	context: TContext;
-	version: number;
+export interface ExecutionSnapshot<TContext = Context> {
+  id: string;
+  workflow_id: string;
+  status: ExecutionStatus;
+  current_step: string;
+  outputs: Record<string, unknown>;
+  context: TContext;
+  created_at: Date;
+  updated_at: Date;
 }

@@ -1,0 +1,39 @@
+{
+  "name": "@sigworkflow/postgres-adapter",
+  "version": "0.0.1",
+  "description": "Sig adapter for PostgreSQL database",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "workflow",
+    "engine",
+    "sig",
+    "typescript",
+    "adapter",
+    "postgres"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "packageManager": "pnpm@12.4.2",
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "typescript": "catalog:",
+    "vitest": "^5.0.1"
+  },
+  "peerDependencies": {
+    "pg": "^8.23.0",
+    "@sigworkflow/core": "workspace:*"
+  },
+  "dependencies": {
+    "pg": "^8.23.0",
+    "@sigworkflow/core": "workspace:*"
+  }
+}

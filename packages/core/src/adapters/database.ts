@@ -1,31 +1,92 @@
-import type { ExecutionEvent } from "../execution/index.js";
-import type { ExecutionSnapshot } from "../execution/snapshot.js";
+export type Model =
+  | "workflows"
+  | "workflowExecutions"
+  | "executionEvents"
+  | "stepExecutions"
+  | "outbox";
+
+export type PersistenceOptions = {
+  models: Record<Model, string>;
+};
+
+export type Pagination = {
+  limit?: number;
+  offset?: number;
+};
+
+export const whereOperators = [
+  "eq",
+  "ne",
+  "lt",
+  "lte",
+  "gt",
+  "gte",
+  "in",
+  "not_in",
+  "contains",
+  "starts_with",
+  "ends_with",
+] as const;
+
+export type WhereOperator = (typeof whereOperators)[number];
+
+export type Where = {
+  operator?: WhereOperator | undefined;
+  value: string | number | boolean | string[] | number[] | Date | null;
+  field: string;
+  connector?: ("AND" | "OR") | undefined;
+  mode?: "sensitive" | "insensitive" | undefined;
+};
+
+export type DBTransactionAdapter = Omit<DatabaseAdapter, "transaction">;
 
 export interface DatabaseAdapter {
-	createExecution(input: {
-		workflowName: string;
-		workflowVersion: number;
-		initialContext: unknown;
-	}): Promise<string>;
+  create: <T extends Record<string, any>, R = T>(data: {
+    model: Model;
+    data: Omit<T, "id">;
+    select?: string[];
+  }) => Promise<R>;
+  findOne: <T extends Record<string, any>, R = T>(data: {
+    model: Model;
+    where: Where[];
+    select?: string[];
+  }) => Promise<R | null>;
+  findMany: <T extends Record<string, any>, R = T>(data: {
+    model: Model;
+    where?: Where[];
+    select?: string[];
+    pagination?: Pagination;
+  }) => Promise<R[]>;
+  count: (data: { model: Model; where?: Where[] }) => Promise<number>;
+  update: <T extends Record<string, any>, R = T>(data: {
+    model: Model;
+    where: Where[];
+    data: Partial<Omit<T, "id">>;
+    select?: string[];
+  }) => Promise<R>;
+  updateMany: (data: {
+    model: Model;
+    where: Where[];
+    update: Record<string, any>;
+  }) => Promise<number>;
+  delete: <_T>(data: { model: Model; where: Where[] }) => Promise<void>;
 
-	appendEvent(
-		executionId: string,
-		event: Omit<ExecutionEvent, "seq" | "createdAt">,
-	): Promise<void>;
+  transaction: <R>(
+    callback: (trx: DBTransactionAdapter) => Promise<R>,
+  ) => Promise<R>;
+}
 
-	loadExecution(executionId: string): Promise<ExecutionSnapshot | null>;
-
-	loadEvents(executionId: string, sinceSeq?: number): Promise<ExecutionEvent[]>;
-
-	/** Falha silenciosamente (retorna false) se expectedVersion não bater — quem chama decide retry */
-	updateExecutionState(
-		executionId: string,
-		patch: Partial<
-			Pick<ExecutionSnapshot, "status" | "currentStep" | "context">
-		>,
-		expectedVersion: number,
-	): Promise<boolean>;
-
-	/** Pra workers fazerem polling de trabalho pendente */
-	claimPendingExecutions(limit: number): Promise<ExecutionSnapshot[]>;
+export function databaseAdapter(
+  adapter: (p: PersistenceOptions) => DatabaseAdapter,
+  options: PersistenceOptions = {
+    models: {
+      workflows: "workflows",
+      workflowExecutions: "workflow_executions",
+      executionEvents: "execution_events",
+      stepExecutions: "step_executions",
+      outbox: "outbox",
+    },
+  },
+): DatabaseAdapter {
+  return adapter(options);
 }

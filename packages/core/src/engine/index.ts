@@ -1,60 +1,62 @@
-import type { ExecutionSnapshot } from "../execution/snapshot.js";
+import type { DatabaseAdapter } from "../adapters/database.js";
+import type { MQAdapter } from "../adapters/mq.js";
+import type { Context } from "../context.js";
+import type { Node } from "../node/index.js";
+import { Workflow, type WorkflowDefinition } from "../workflow/index.js";
+import type { WorkflowSnapshot } from "../workflow/snapshot.js";
+import { runner } from "./runner.js";
 
 export type WorkflowStatus =
-	| "pending"
-	| "running"
-	| "suspended"
-	| "completed"
-	| "failed"
-	| "cancelled";
+  | "pending"
+  | "running"
+  | "suspended"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export type EngineEvent =
-	| "step:started"
-	| "step:completed"
-	| "step:failed"
-	| "execution:suspended"
-	| "execution:completed"
-	| "execution:failed";
+  | "step:started"
+  | "step:completed"
+  | "step:failed"
+  | "execution:suspended"
+  | "execution:completed"
+  | "execution:failed";
 
 export interface EngineOptions {
-	adapter: PersistenceAdapter;
-	workflows: CompiledWorkflow[];
-	concurrency?: number; // quantas execuções processar em paralelo
-	pollIntervalMs?: number;
+  db: DatabaseAdapter;
+  mq: MQAdapter;
+  nodes: Node[];
+  worker?: boolean;
 }
 
-export declare class WorkflowEngine {
-	constructor(options: EngineOptions);
+export class WorkflowEngine {
+  private readonly nodes: Map<string, Node>;
 
-	/** Cria e persiste uma nova execução (não roda step nenhum ainda) */
-	start<TContext = any>(
-		workflowName: string,
-		initialContext: TContext,
-	): Promise<{ executionId: string }>;
+  constructor(private options: EngineOptions) {
+    this.nodes = new Map(
+      options.nodes.map((node) => [node.constructor.name, node]),
+    );
 
-	/** Envia um sinal a uma execução suspensa em waitForSignal(name) */
-	signal(
-		executionId: string,
-		signalName: string,
-		payload?: unknown,
-	): Promise<void>;
+    options.mq.spawnWorker(async (job) => await runner(this, job));
+  }
 
-	cancel(executionId: string, reason?: string): Promise<void>;
+  async spawn(
+    workflow: WorkflowDefinition,
+    initialContext: Context,
+  ): Promise<Workflow> {
+    const { name, definition } = workflow.build();
 
-	getExecution(executionId: string): Promise<ExecutionSnapshot>;
+    const snapshot: WorkflowSnapshot<Context> = await this.options.db.create({
+      model: "workflows",
+      data: {
+        name: name,
+        context: JSON.stringify(initialContext),
+        definition: JSON.stringify(definition),
+      },
+    });
 
-	/** Reconstrói o estado via replay dos eventos (útil pra debug/auditoria) */
-	replay(executionId: string): Promise<ExecutionSnapshot>;
+    return new Workflow(snapshot, this.options);
+  }
 
-	/** Inicia o loop de polling que processa execuções pendentes. Retorna função de shutdown. */
-	runWorker(): () => Promise<void>;
-
-	on(
-		event: EngineEvent,
-		handler: (payload: {
-			executionId: string;
-			stepId?: string;
-			error?: Error;
-		}) => void,
-	): void;
+  async poll() {}
 }

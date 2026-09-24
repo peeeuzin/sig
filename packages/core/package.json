@@ -4,19 +4,38 @@
   "description": "A workflow engine",
   "license": "MIT",
   "type": "module",
-  "packageManager": "pnpm@12.4.2",
-  "keywords": ["workflow", "engine", "sig", "typescript"],
+  "keywords": [
+    "workflow",
+    "engine",
+    "sig",
+    "typescript"
+  ],
   "scripts": {
-    "core": "pnpm --filter @sigworkflow/core"
+    "build": "tsc",
+    "test": "vitest run"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "12.4.2",
-      "onFail": "download"
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./adapters/database": {
+      "import": "./dist/adapters/database.js",
+      "types": "./dist/adapters/database.d.ts"
+    },
+    "./adapters/mq": {
+      "import": "./dist/adapters/mq.js",
+      "types": "./dist/adapters/mq.d.ts"
     }
   },
+  "packageManager": "pnpm@12.4.2",
   "devDependencies": {
-    "typescript": "catalog:"
+    "@sigworkflow/postgres-adapter": "workspace:*",
+    "@testcontainers/postgresql": "^12.1.0",
+    "@types/node": "^26.6.2",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
+    "typescript": "catalog:",
+    "vitest": "^5.0.1"
   }
 }

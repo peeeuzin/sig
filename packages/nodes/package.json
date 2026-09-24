@@ -1,0 +1,30 @@
+{
+  "name": "@sigworkflow/nodes",
+  "version": "0.0.1",
+  "description": "Basic nodes for the workflow engine",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "workflow",
+    "nodes",
+    "sig",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "packageManager": "pnpm@12.4.2",
+  "dependencies": {
+    "@sigworkflow/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@sigworkflow/core": "workspace:*"
+  }
+}

@@ -1,5 +1,11 @@
 packages:
   - packages/*
 
+allowBuilds:
+  cpu-features: false
+  msgpackr-extract: set this to true or false
+  protobufjs: false
+  ssh2: false
+
 catalog:
   typescript: ^6
