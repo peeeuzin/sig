@@ -1,14 +1,18 @@
 import type { Context } from "../context.js";
-import type { NodeDefinition } from "../node/index.js";
+import {
+  NextAction,
+  type NodeDefinition,
+  type StepReference,
+} from "../node/index.js";
 
-export interface WorkflowExecutionDefinition<
-  TContext extends Context = Context,
-> {
-  id: string;
-  name: string;
-  execute: NodeDefinition<TContext>;
-  retry: RetryPolicy | undefined;
-}
+export type WorkflowExecutionDefinition<TContext extends Context = Context> = {
+  [id: string]: {
+    name: string;
+    execute: NodeDefinition<TContext>;
+    retry: RetryPolicy | undefined;
+    next: StepReference;
+  };
+};
 
 export class WorkflowDefinition<TContext extends Context = Context> {
   private name: string;
@@ -33,12 +37,18 @@ export class WorkflowDefinition<TContext extends Context = Context> {
   build() {
     return {
       name: this.name,
-      definition: this.steps.map((step) => ({
-        id: step.id,
-        name: step.name,
-        execute: step.execute,
-        retry: step.retry,
-      })) satisfies WorkflowExecutionDefinition<TContext>[],
+      definition: this.steps.reduce(
+        (acc, step) => {
+          acc[step.id] = {
+            name: step.name,
+            execute: step.execute,
+            retry: step.retry,
+            next: step.next ?? NextAction.NEXT,
+          };
+          return acc;
+        },
+        {} as WorkflowExecutionDefinition<TContext>,
+      ),
     };
   }
 }
@@ -51,6 +61,7 @@ export interface RetryPolicy {
 export interface StepDefinition<TParams extends Context = Context> {
   id: string;
   name: string;
-  retry?: RetryPolicy;
   execute: NodeDefinition<TParams>;
+  retry?: RetryPolicy;
+  next?: StepReference;
 }

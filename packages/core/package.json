@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run --config vitest.config.ts"
   },
   "exports": {
     ".": {
@@ -30,12 +30,14 @@
   },
   "packageManager": "pnpm@12.4.2",
   "devDependencies": {
-    "@sigworkflow/postgres-adapter": "workspace:*",
     "@testcontainers/postgresql": "^12.1.0",
     "@types/node": "^26.6.2",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.0",
     "typescript": "catalog:",
     "vitest": "^5.0.1"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

@@ -5,10 +5,8 @@
   "packageManager": "pnpm@12.4.2",
   "scripts": {
     "core": "pnpm --filter @sigworkflow/core",
-    "postgres:adapter": "pnpm --filter @sigworkflow/postgres-adapter",
-    "bullmq:adapter": "pnpm --filter @sigworkflow/bullmq-adapter",
-    "nodes": "pnpm --filter @sigworkflow/nodes",
-    "lint": "biome lint"
+    "lint": "biome lint",
+    "test": "vitest run"
   },
   "devEngines": {
     "packageManager": {
@@ -19,7 +17,14 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@testcontainers/postgresql": "^12.1.0",
+    "@testcontainers/redis": "^12.1.0",
     "@types/node": "^22.20.2",
-    "typescript": "catalog:"
+    "@types/pg": "^8.23.1",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0",
+    "turbo": "^2.11.3",
+    "typescript": "catalog:",
+    "vitest": "^5.0.1"
   }
 }

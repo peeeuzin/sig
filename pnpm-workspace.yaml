@@ -3,7 +3,7 @@ packages:
 
 allowBuilds:
   cpu-features: false
-  msgpackr-extract: set this to true or false
+  msgpackr-extract: false
   protobufjs: false
   ssh2: false
 

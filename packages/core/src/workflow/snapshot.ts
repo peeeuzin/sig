@@ -5,6 +5,6 @@ export interface WorkflowSnapshot<TContext extends Context = Context> {
   id: string;
   name: string;
   context: TContext;
-  definition: WorkflowExecutionDefinition<TContext>[];
-  created_at: Date;
+  definition: WorkflowExecutionDefinition<TContext>;
+  createdAt: Date;
 }

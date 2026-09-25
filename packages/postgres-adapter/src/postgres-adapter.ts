@@ -1,32 +1,80 @@
-/** biome-ignore-all lint/suspicious/noExplicitAny: This is a generic adapter that can be used with any database that supports SQL. */
 import type {
   DatabaseAdapter,
+  DatabaseInsert,
+  DatabaseSchema,
+  DatabaseUpdate,
   DBTransactionAdapter,
   Model,
   PersistenceOptions,
   Where,
 } from "@sigworkflow/core/adapters/database";
 import type { Pool, PoolClient } from "pg";
+import { quote, selection, shifted } from "./sql.js";
 
 type Queryable = Pick<Pool, "query"> | Pick<PoolClient, "query" | "release">;
 
-function quote(identifier: string): string {
-  const parts = identifier.split(".");
-  if (!parts.every((part) => /^[A-Za-z_][A-Za-z0-9_$]*$/.test(part))) {
-    throw new Error(`Invalid SQL identifier: ${identifier}`);
+const bjsonFields: Partial<Record<Model, string[]>> = {
+  workflows: ["context", "definition"],
+  workflowExecutions: ["context", "outputs"],
+  // outbox: ["payload"],
+};
+
+export function parseBjsonFields<T extends Record<string, unknown>>(
+  model: Model,
+  row: T,
+  options: PersistenceOptions,
+): T {
+  const parsed: Record<string, unknown> = { ...row };
+  const configuredFields = (
+    options as PersistenceOptions & {
+      fields?: PersistenceOptions["fields"];
+    }
+  ).fields?.[model] as Record<string, string> | undefined;
+
+  for (const logicalField of bjsonFields[model] ?? []) {
+    const column = configuredFields?.[logicalField] ?? logicalField;
+    const value = parsed[logicalField] ?? parsed[column];
+
+    if (typeof value === "string") {
+      parsed[logicalField] = JSON.parse(value) as unknown;
+    }
   }
-  return parts.map((part) => `"${part}"`).join(".");
+
+  return parsed as T;
 }
 
-function selection(select?: string[]): string {
-  return select?.length ? select.map(quote).join(", ") : "*";
+function toLogicalFields<T extends Record<string, unknown>>(
+  model: Model,
+  row: T,
+  options: PersistenceOptions,
+): T {
+  const logicalRow: Record<string, unknown> = { ...row };
+  const configuredFields = (
+    options as PersistenceOptions & {
+      fields?: PersistenceOptions["fields"];
+    }
+  ).fields?.[model] as Record<string, string> | undefined;
+
+  for (const [logicalName, physicalName] of Object.entries(
+    configuredFields ?? {},
+  )) {
+    if (physicalName in logicalRow) {
+      logicalRow[logicalName] = logicalRow[physicalName];
+      if (physicalName !== logicalName) delete logicalRow[physicalName];
+    }
+  }
+
+  return logicalRow as T;
 }
 
-function whereClause(where?: Where[]): { sql: string; values: unknown[] } {
+function whereClause(
+  where: Where[] | undefined,
+  field: (name: string) => string,
+): { sql: string; values: unknown[] } {
   if (!where?.length) return { sql: "", values: [] };
   const values: unknown[] = [];
   const clauses = where.map((condition, index) => {
-    const field = quote(condition.field);
+    const column = field(condition.field);
     const operator = condition.operator ?? "eq";
     const connector = index ? ` ${condition.connector ?? "AND"} ` : "";
     const bind = (value: unknown) => {
@@ -36,8 +84,8 @@ function whereClause(where?: Where[]): { sql: string; values: unknown[] } {
     const value = condition.value;
 
     if (value === null) {
-      if (operator === "eq") return `${connector + field} IS NULL`;
-      if (operator === "ne") return `${connector + field} IS NOT NULL`;
+      if (operator === "eq") return `${connector + column} IS NULL`;
+      if (operator === "ne") return `${connector + column} IS NOT NULL`;
       throw new Error(`Operator "${operator}" cannot be used with null`);
     }
 
@@ -45,25 +93,25 @@ function whereClause(where?: Where[]): { sql: string; values: unknown[] } {
       case "eq":
         return (
           connector +
-          field +
+          column +
           (condition.mode === "insensitive" ? " ILIKE " : " = ") +
           bind(value)
         );
       case "ne":
         return (
           connector +
-          field +
+          column +
           (condition.mode === "insensitive" ? " NOT ILIKE " : " <> ") +
           bind(value)
         );
       case "lt":
-        return `${connector + field} < ${bind(value)}`;
+        return `${connector + column} < ${bind(value)}`;
       case "lte":
-        return `${connector + field} <= ${bind(value)}`;
+        return `${connector + column} <= ${bind(value)}`;
       case "gt":
-        return `${connector + field} > ${bind(value)}`;
+        return `${connector + column} > ${bind(value)}`;
       case "gte":
-        return `${connector + field} >= ${bind(value)}`;
+        return `${connector + column} >= ${bind(value)}`;
       case "in":
       case "not_in":
         if (!Array.isArray(value))
@@ -72,7 +120,7 @@ function whereClause(where?: Where[]): { sql: string; values: unknown[] } {
           return connector + (operator === "in" ? "FALSE" : "TRUE");
         return (
           connector +
-          field +
+          column +
           (operator === "in" ? " = ANY(" : " <> ALL(") +
           bind(value) +
           ")"
@@ -91,7 +139,7 @@ function whereClause(where?: Where[]): { sql: string; values: unknown[] } {
               : `%${escaped}`;
         return (
           connector +
-          field +
+          column +
           (condition.mode === "insensitive" ? " ILIKE " : " LIKE ") +
           bind(pattern) +
           " ESCAPE '\\'"
@@ -121,60 +169,131 @@ export function adapterFor(
 
     return quote(tableName);
   };
-  const shifted = (sql: string, offset: number) =>
-    sql.replace(/\$(\d+)/g, (_, index: string) => `$${Number(index) + offset}`);
+
+  const field = (model: Model, logicalField: string) => {
+    const configuredFields = (
+      options as PersistenceOptions & {
+        fields?: PersistenceOptions["fields"];
+      }
+    ).fields?.[model] as Record<string, string> | undefined;
+
+    return quote(configuredFields?.[logicalField] ?? logicalField);
+  };
+
+  const fields = (model: Model, select?: string[]) =>
+    select?.length
+      ? select
+          .map((name) => `${field(model, name)} AS ${quote(name)}`)
+          .join(", ")
+      : selection();
+
+  const logicalField = (model: Model, name: string) => {
+    const configuredFields = (
+      options as PersistenceOptions & {
+        fields?: PersistenceOptions["fields"];
+      }
+    ).fields?.[model] as Record<string, string> | undefined;
+    return (
+      Object.entries(configuredFields ?? {}).find(
+        ([, configured]) => configured === name,
+      )?.[0] ?? name
+    );
+  };
+
+  const serialize = (model: Model, name: string, value: unknown) =>
+    (bjsonFields[model] ?? []).includes(logicalField(model, name))
+      ? JSON.stringify(value)
+      : value;
+
+  const entriesFor = (model: Model, entries: [string, unknown][]) =>
+    entries.map(
+      ([name, value]) =>
+        [field(model, name), serialize(model, name, value)] as const,
+    );
 
   return {
-    async create<T extends Record<string, any>, R = T>({
+    async create<M extends Model>({
       model,
       data,
       select,
-    }: any): Promise<R> {
-      const entries = Object.entries(data);
+    }: {
+      model: M;
+      data: DatabaseInsert[M];
+      select?: string[];
+    }): Promise<DatabaseSchema[M]> {
+      const entries = entriesFor(
+        model,
+        Object.entries(data as unknown as Record<string, unknown>),
+      );
       const result = entries.length
         ? await queryable.query(
             "INSERT INTO " +
               table(model) +
               " (" +
-              entries.map(([key]) => quote(key)).join(", ") +
+              entries.map(([key]) => key).join(", ") +
               ") VALUES (" +
               entries.map((_, index) => `$${index + 1}`).join(", ") +
               ") RETURNING " +
-              selection(select),
+              fields(model, select),
             entries.map(([, value]) => value),
           )
         : await queryable.query(
             "INSERT INTO " +
               table(model) +
               " DEFAULT VALUES RETURNING " +
-              selection(select),
+              fields(model, select),
           );
-      return firstRow(result, "create") as R;
+
+      return parseBjsonFields(
+        model,
+        toLogicalFields(
+          model,
+          firstRow(result, "create") as Record<string, unknown>,
+          options,
+        ),
+        options,
+      ) as DatabaseSchema[M];
     },
-    async findOne<T extends Record<string, any>, R = T>({
+    async findOne<M extends Model>({
       model,
       where,
       select,
-    }: any): Promise<R | null> {
-      const filter = whereClause(where);
+    }: {
+      model: M;
+      where: Where[];
+      select?: string[];
+    }): Promise<DatabaseSchema[M] | null> {
+      const filter = whereClause(where, (name) => field(model, name));
       const result = await queryable.query(
         "SELECT " +
-          selection(select) +
+          fields(model, select) +
           " FROM " +
           table(model) +
           filter.sql +
           " LIMIT 1",
         filter.values,
       );
-      return (result.rows[0] as R | undefined) ?? null;
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      return row
+        ? (parseBjsonFields(
+            model,
+            toLogicalFields(model, row, options),
+            options,
+          ) as DatabaseSchema[M])
+        : null;
     },
-    async findMany<T extends Record<string, any>, R = T>({
+    async findMany<M extends Model>({
       model,
       where,
       select,
       pagination,
-    }: any): Promise<R[]> {
-      const filter = whereClause(where);
+    }: {
+      model: M;
+      where?: Where[];
+      select?: string[];
+      pagination?: { limit?: number; offset?: number };
+    }): Promise<DatabaseSchema[M][]> {
+      const filter = whereClause(where, (name) => field(model, name));
       const values = [...filter.values];
       let page = "";
       if (pagination?.limit !== undefined) {
@@ -187,36 +306,50 @@ export function adapterFor(
       }
       const result = await queryable.query(
         "SELECT " +
-          selection(select) +
+          fields(model, select) +
           " FROM " +
           table(model) +
           filter.sql +
           page,
         values,
       );
-      return result.rows as R[];
+      return result.rows.map((row) =>
+        parseBjsonFields(
+          model,
+          toLogicalFields(model, row as Record<string, unknown>, options),
+          options,
+        ),
+      ) as DatabaseSchema[M][];
     },
     async count({ model, where }) {
-      const filter = whereClause(where);
+      const filter = whereClause(where, (name) => field(model, name));
       const result = await queryable.query<{ count: string }>(
         `SELECT COUNT(*) AS count FROM ${table(model)} ${filter.sql}`,
         filter.values,
       );
       return Number(firstRow(result, "count").count);
     },
-    async update<T extends Record<string, any>, R = T>({
+    async update<M extends Model>({
       model,
       where,
       data,
       select,
-    }: any): Promise<R> {
-      const entries = Object.entries(data);
+    }: {
+      model: M;
+      where: Where[];
+      data: DatabaseUpdate<M>;
+      select?: string[];
+    }): Promise<DatabaseSchema[M] | null> {
+      const entries = entriesFor(
+        model,
+        Object.entries(data as unknown as Record<string, unknown>),
+      );
       if (!entries.length)
         throw new Error("update requires at least one field");
-      const filter = whereClause(where);
+      const filter = whereClause(where, (name) => field(model, name));
       const values = entries.map(([, value]) => value).concat(filter.values);
       const assignments = entries
-        .map(([key], index) => `${quote(key)} = $${index + 1}`)
+        .map(([key], index) => `${key} = $${index + 1}`)
         .join(", ");
       const result = await queryable.query(
         "UPDATE " +
@@ -225,18 +358,28 @@ export function adapterFor(
           assignments +
           shifted(filter.sql, entries.length) +
           " RETURNING " +
-          selection(select),
+          fields(model, select),
         values,
       );
-      return firstRow(result, "update") as R;
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      return row
+        ? (parseBjsonFields(
+            model,
+            toLogicalFields(model, row, options),
+            options,
+          ) as DatabaseSchema[M])
+        : null;
     },
     async updateMany({ model, where, update }) {
-      const entries = Object.entries(update);
+      const entries = entriesFor(
+        model,
+        Object.entries(update as unknown as Record<string, unknown>),
+      );
       if (!entries.length) return 0;
-      const filter = whereClause(where);
+      const filter = whereClause(where, (name) => field(model, name));
       const values = entries.map(([, value]) => value).concat(filter.values);
       const assignments = entries
-        .map(([key], index) => `${quote(key)} = $${index + 1}`)
+        .map(([key], index) => `${key} = $${index + 1}`)
         .join(", ");
       const result = await queryable.query(
         "UPDATE " +
@@ -249,13 +392,13 @@ export function adapterFor(
       return result.rowCount ?? 0;
     },
     async delete({ model, where }) {
-      const filter = whereClause(where);
+      const filter = whereClause(where, (name) => field(model, name));
       await queryable.query(
         `DELETE FROM ${table(model)} ${filter.sql}`,
         filter.values,
       );
     },
-  } as DBTransactionAdapter;
+  } satisfies DBTransactionAdapter;
 }
 
 export function postgres(

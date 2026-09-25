@@ -6,12 +6,16 @@ export type IfNodeParams = {
   field: string;
   operator: Operator;
   value: any;
-  then: string;
-  else?: string;
+  ifThen: string;
+  ifElse?: string;
 };
 
-export class IfNode extends Node<IfNodeParams> {
-  async run(): Promise<void> {
+export type IfNodeOutput = {
+  conditionMet: boolean;
+};
+
+export class IfNode extends Node<IfNodeParams, IfNodeOutput> {
+  async run() {
     const evaluatedValue = this.evaluate(this.params.field);
 
     const conditionMet = evaluateCondition(
@@ -21,17 +25,19 @@ export class IfNode extends Node<IfNodeParams> {
     );
 
     if (conditionMet) {
-      await this.setStep(this.params.then);
-    } else if (this.params.else) {
-      await this.setStep(this.params.else);
+      return this.goTo(this.params.ifThen);
+    } else if (this.params.ifElse) {
+      return this.goTo(this.params.ifElse);
     }
+
+    return this.next({ conditionMet });
   }
 }
 
-function evaluateCondition(
-  fieldValue: any,
+function evaluateCondition<V>(
+  fieldValue: V,
   operator: Operator,
-  value: any,
+  value: V,
 ): boolean {
   switch (operator) {
     case "eq":

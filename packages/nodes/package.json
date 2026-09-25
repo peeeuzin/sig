@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run --config vitest.config.ts"
   },
   "exports": {
     ".": {
@@ -26,5 +26,8 @@
   },
   "peerDependencies": {
     "@sigworkflow/core": "workspace:*"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

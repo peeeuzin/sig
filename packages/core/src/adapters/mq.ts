@@ -3,11 +3,17 @@ export type MessageQueueOptions = {
   concurrency?: number;
 };
 
-export type JobData = {};
+export type JobData = {
+  executionId: string;
+  stepId?: string;
+  workflowId?: string;
+  attempt?: number;
+  [key: string]: any;
+};
 
 export interface MQAdapter {
-  publish(topic: string, message: any): Promise<void>;
-  spawnWorker(runner: (job: any) => Promise<void>): void;
+  publish(topic: string, message: JobData | any): Promise<void>;
+  spawnWorker(runner: (job: any) => Promise<void>): any;
 }
 
 export function mqAdapter(

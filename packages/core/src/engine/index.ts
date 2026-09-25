@@ -31,13 +31,23 @@ export interface EngineOptions {
 
 export class WorkflowEngine {
   private readonly nodes: Map<string, Node>;
+  private readonly _listeners: Map<EngineEvent, Set<(data: any) => void>> =
+    new Map();
 
-  constructor(private options: EngineOptions) {
+  constructor(public options: EngineOptions) {
     this.nodes = new Map(
       options.nodes.map((node) => [node.constructor.name, node]),
     );
 
     options.mq.spawnWorker(async (job) => await runner(this, job));
+  }
+
+  get listeners() {
+    return this._listeners;
+  }
+
+  getNode(name: string): Node | undefined {
+    return this.nodes.get(name);
   }
 
   async spawn(
@@ -50,13 +60,17 @@ export class WorkflowEngine {
       model: "workflows",
       data: {
         name: name,
-        context: JSON.stringify(initialContext),
-        definition: JSON.stringify(definition),
+        context: initialContext,
+        definition: definition,
       },
     });
 
-    return new Workflow(snapshot, this.options);
+    return new Workflow(snapshot, this);
   }
 
-  async poll() {}
+  on(event: EngineEvent, callback: (data: any) => void) {
+    const handlers = this._listeners.get(event) ?? new Set();
+    handlers.add(callback);
+    this._listeners.set(event, handlers);
+  }
 }

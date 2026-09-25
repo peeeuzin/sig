@@ -3,11 +3,11 @@ import type { ExecutionStatus } from "./index.js";
 
 export interface ExecutionSnapshot<TContext = Context> {
   id: string;
-  workflow_id: string;
+  workflowId: string;
   status: ExecutionStatus;
-  current_step: string;
+  currentStep: string | null;
   outputs: Record<string, unknown>;
   context: TContext;
-  created_at: Date;
-  updated_at: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }

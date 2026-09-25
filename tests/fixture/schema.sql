@@ -21,34 +21,6 @@ CREATE TABLE workflow_executions (
 CREATE INDEX idx_executions_status ON workflow_executions(status);
 CREATE INDEX idx_executions_workflow ON workflow_executions(workflow_id);
 
-CREATE TABLE execution_events (
-  id BIGSERIAL PRIMARY KEY,
-  execution_id UUID NOT NULL REFERENCES workflow_executions(id),
-  seq INT NOT NULL,
-  type TEXT NOT NULL,
-  payload JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (execution_id, seq)
-);
-
-CREATE INDEX idx_events_execution ON execution_events(execution_id, seq);
-
-CREATE TABLE step_executions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  execution_id UUID NOT NULL REFERENCES workflow_executions(id),
-  step_id TEXT NOT NULL,
-  attempt INT NOT NULL DEFAULT 1,
-  status TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
-  idempotency_key TEXT NOT NULL,
-  output JSONB,
-  error TEXT,
-  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  finished_at TIMESTAMPTZ,
-  UNIQUE (idempotency_key)
-);
-
-CREATE INDEX idx_steps_execution ON step_executions(execution_id, step_id);
-
 CREATE TABLE outbox (
   id BIGSERIAL PRIMARY KEY,
   execution_id UUID NOT NULL REFERENCES workflow_executions(id),
