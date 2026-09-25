@@ -1,4 +1,4 @@
-# Sig
+# Sig (WIP)
 A Typescript workflow engine
 
 ## Installation
