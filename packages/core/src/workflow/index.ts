@@ -7,6 +7,8 @@ import {
 } from "../index.js";
 import type { WorkflowSnapshot } from "./snapshot.js";
 
+export * from "./definition.js";
+
 export class Workflow<TContext extends Context = Context> {
   constructor(
     private _snapshot: WorkflowSnapshot<TContext>,
@@ -19,21 +21,25 @@ export class Workflow<TContext extends Context = Context> {
 
   async spawn<TExecutionContext extends Context>(
     initialContext: TExecutionContext,
-  ): Promise<Execution<TExecutionContext>> {
+  ): Promise<Execution<TExecutionContext, TContext>> {
     const firstStepId = Object.keys(this.snapshot.definition)[0];
 
     const snapshot = (await this._engine.options.db.create({
-        model: "workflowExecutions",
-        data: {
-          workflowId: this.snapshot.id,
-          status: "pending" as ExecutionStatus,
-          context: initialContext,
-          outputs: {},
-          currentStep: firstStepId ?? null,
-        },
-      })) as ExecutionSnapshot<TExecutionContext>;
+      model: "workflowExecutions",
+      data: {
+        workflowId: this.snapshot.id,
+        status: "pending" as ExecutionStatus,
+        context: initialContext,
+        outputs: {},
+        currentStep: firstStepId ?? null,
+      },
+    })) as ExecutionSnapshot<TExecutionContext>;
 
-    return new Execution<TExecutionContext>(snapshot, this, this._engine);
+    return new Execution<TExecutionContext, TContext>(
+      snapshot,
+      this,
+      this._engine,
+    );
   }
 
   async start() {}
@@ -42,5 +48,3 @@ export class Workflow<TContext extends Context = Context> {
 
   async resume() {}
 }
-
-export * from "./definition.js";

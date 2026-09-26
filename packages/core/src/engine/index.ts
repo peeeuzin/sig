@@ -50,20 +50,20 @@ export class WorkflowEngine {
     return this.nodes.get(name);
   }
 
-  async spawn(
-    workflow: WorkflowDefinition,
-    initialContext: Context,
-  ): Promise<Workflow> {
+  async spawn<TWorkflowContext extends Context>(
+    workflow: WorkflowDefinition<TWorkflowContext>,
+    initialContext: TWorkflowContext,
+  ): Promise<Workflow<TWorkflowContext>> {
     const { name, definition } = workflow.build();
 
-    const snapshot: WorkflowSnapshot<Context> = await this.options.db.create({
+    const snapshot = (await this.options.db.create({
       model: "workflows",
       data: {
         name: name,
         context: initialContext,
         definition: definition,
       },
-    });
+    })) as WorkflowSnapshot<TWorkflowContext>;
 
     return new Workflow(snapshot, this);
   }

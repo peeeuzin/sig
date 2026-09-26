@@ -1,11 +1,13 @@
-import { Node } from "@sigworkflow/core";
+import { type BasicTypes, type Context, Node } from "@sigworkflow/core";
 
 export type Operator = "eq" | "neq" | "gt" | "lt" | "gte" | "lte";
 
+export type IfNodeValue = BasicTypes | Context | Context[];
+
 export type IfNodeParams = {
-  field: string;
+  left: IfNodeValue;
   operator: Operator;
-  value: any;
+  right: IfNodeValue;
   ifThen: string;
   ifElse?: string;
 };
@@ -16,12 +18,10 @@ export type IfNodeOutput = {
 
 export class IfNode extends Node<IfNodeParams, IfNodeOutput> {
   async run() {
-    const evaluatedValue = this.evaluate(this.params.field);
-
     const conditionMet = evaluateCondition(
-      evaluatedValue,
+      this.params.left,
       this.params.operator,
-      this.params.value,
+      this.params.right,
     );
 
     if (conditionMet) {

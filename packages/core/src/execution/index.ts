@@ -14,15 +14,22 @@ export type ExecutionStatus =
   | "failed"
   | "cancelled";
 
-export class Execution<TContext extends Context = Context> {
+export class Execution<
+  TContext extends Context = Context,
+  TWorkflowContext extends Context = Context,
+> {
   constructor(
     private _snapshot: ExecutionSnapshot<TContext>,
-    private _workflow: Workflow,
+    private _workflow: Workflow<TWorkflowContext>,
     private _engine: WorkflowEngine,
   ) {}
 
   get id(): string {
     return this._snapshot.id;
+  }
+
+  get workflow(): Workflow<TWorkflowContext> {
+    return this._workflow;
   }
 
   get snapshot(): ExecutionSnapshot<TContext> {

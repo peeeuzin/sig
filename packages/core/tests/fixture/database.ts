@@ -1,7 +1,9 @@
 import { vi } from "vitest";
 import type { DatabaseAdapter } from "../../src/adapters/database";
 
-export const mockDatabaseAdapter: DatabaseAdapter = {
+export const mockDatabaseAdapter: (
+  mocks?: Partial<DatabaseAdapter>,
+) => DatabaseAdapter = (mocks) => ({
   create: vi.fn(),
   findOne: vi.fn(),
   findMany: vi.fn(),
@@ -10,4 +12,5 @@ export const mockDatabaseAdapter: DatabaseAdapter = {
   updateMany: vi.fn(),
   delete: vi.fn(),
   transaction: vi.fn(),
-};
+  ...mocks,
+});

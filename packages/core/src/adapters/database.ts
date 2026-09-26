@@ -2,11 +2,14 @@ import type { Context } from "../context.js";
 import type { WorkflowStatus } from "../engine/index.js";
 import type { WorkflowExecutionDefinition } from "../workflow/definition.js";
 
-export type DatabaseSchema = {
+export type DatabaseSchema<
+  TWorkflowContext extends Context = Context,
+  TExecutionContext extends Context = Context,
+> = {
   workflows: {
     id: string;
     name: string;
-    context: Context;
+    context: TWorkflowContext;
     definition: WorkflowExecutionDefinition;
     createdAt: Date;
   };
@@ -15,7 +18,7 @@ export type DatabaseSchema = {
     workflowId: string;
     status: WorkflowStatus;
     currentStep: string | null;
-    context: Context;
+    context: TExecutionContext;
     outputs: Record<string, unknown>;
     createdAt: Date;
     updatedAt: Date;

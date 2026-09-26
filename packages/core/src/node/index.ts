@@ -22,6 +22,10 @@ export type NodeReturn<TOutput extends object = Record<string, unknown>> = {
   output?: TOutput;
 };
 
+export function evaluate(field: string): string {
+  return `<$${field}>`;
+}
+
 export interface NodeRunnable<
   TOutput extends object = Record<string, unknown>,
 > {
@@ -31,30 +35,37 @@ export interface NodeRunnable<
 export class Node<
   TParams extends Context = Context,
   TOutput extends object = Record<string, unknown>,
-  TContext extends Context = Context,
+  TWorkflowContext extends Context = Context,
+  TExecutionContext extends Context = Context,
 > implements NodeRunnable<TOutput>
 {
   // These fields are defined when the node is executed
-  private _context!: TContext;
+  private _context!: TExecutionContext;
   private _params!: TParams;
-  private _execution!: Execution<TContext>;
+  private _execution!: Execution<TExecutionContext, TWorkflowContext>;
 
-  protected get context(): TContext {
+  /** Context belonging to this workflow definition. */
+  protected get workflowContext(): TWorkflowContext {
+    return this._execution.workflow.snapshot.context;
+  }
+
+  /** Context belonging to this execution instance. */
+  protected get context(): TExecutionContext {
     return this._context;
   }
 
   protected get params(): TParams {
-    return this._params;
+    return this.resolveValue(this._params) as TParams;
   }
 
-  protected get execution(): Execution<TContext> {
+  protected get execution(): Execution<TExecutionContext, TWorkflowContext> {
     return this._execution;
   }
 
   setExecutionContext(
-    context: TContext,
+    context: TExecutionContext,
     params: TParams,
-    execution: Execution<TContext>,
+    execution: Execution<TExecutionContext, TWorkflowContext>,
   ): void {
     this._context = context;
     this._params = params;
@@ -96,28 +107,67 @@ export class Node<
   }
 
   protected evaluate<TReturn = unknown>(field: string): TReturn {
-    if (!field.startsWith("$")) return field as unknown as TReturn;
+    // if field does not start with "<$" or does not end with ">",
+    // is means that is a string concatenation, so we need to replace all references with their values
+    // for example, "Hello <$context.execution.userId>" should be replaced with "Hello 123" if the userId is 123
+    if (!field.startsWith("<$") || !field.endsWith(">")) {
+      return field.replaceAll(/<\$([\w]+(?:\.[\w]+)*)>/g, (reference) => {
+        const value = this.resolveReference(reference);
+        return String(value);
+      }) as unknown as TReturn;
+    }
 
-    const outputs = (this._execution?.snapshot?.outputs ?? {}) as Record<
+    return this.resolveReference(field) as TReturn;
+  }
+
+  private resolveValue(value: unknown): unknown {
+    if (typeof value === "string") return this.evaluate(value);
+    if (Array.isArray(value))
+      return value.map((item) => this.resolveValue(item));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          this.resolveValue(item),
+        ]),
+      );
+    }
+    return value;
+  }
+
+  private resolveReference(field: string): unknown {
+    const outputs = (this._execution?.outputs ?? this._execution?.snapshot?.outputs ?? {}) as Record<
       string,
       unknown
     >;
-    const context = (this._execution?.snapshot?.context ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const executionContext = this.context as Record<string, unknown>;
+    const workflowContext = (this._execution?.workflow?.snapshot?.context ??
+      {}) as Record<string, unknown>;
 
     const obj: Record<string, unknown> = {
-      output: outputs,
-      context,
+      outputs,
+      context: {
+        execution: executionContext,
+        workflow: workflowContext,
+      },
     };
 
-    const parts = field.replace(/^\$/, "").split(".");
+    const parts = field.replace(/<\$|>/g, "").split(".");
+
+    if (parts[0] !== "outputs" && parts[0] !== "context") {
+      return parts.reduce<unknown>(
+        (current, key) =>
+          current && typeof current === "object"
+            ? (current as Record<string, unknown>)[key]
+            : undefined,
+        executionContext,
+      );
+    }
 
     return parts.reduce<any>(
       (current, key) =>
         current && typeof current === "object" ? current[key] : undefined,
       obj,
-    ) as TReturn;
+    );
   }
 }

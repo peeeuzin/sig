@@ -1,5 +1,5 @@
 import type { Model } from "@sigworkflow/core/adapters/database";
-import { describe, expect, type Mock, test, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 import { adapterFor, parseBjsonFields } from "../src/postgres-adapter";
 
 const createPostgresTestAdapter = (mock?: Mock) => {
@@ -36,13 +36,7 @@ const createPostgresTestAdapter = (mock?: Mock) => {
 };
 
 describe("postgres-adapter", () => {
-  test("adapterFor returns a DatabaseAdapter", () => {
-    const adapter = createPostgresTestAdapter();
-
-    expect(adapter).toBeDefined();
-  });
-
-  test("creates a valid adapter with custom query function", async () => {
+  it("creates a valid adapter with custom query function", async () => {
     const mockQuery = vi
       .fn()
       .mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
@@ -65,7 +59,7 @@ describe("postgres-adapter", () => {
     expect(result).toEqual({ id: 1 });
   });
 
-  test("throws error for unknown model", async () => {
+  it("throws error for unknown model", async () => {
     const adapter = createPostgresTestAdapter();
 
     await expect(
@@ -76,7 +70,7 @@ describe("postgres-adapter", () => {
     ).rejects.toThrow("Unknown persistence model: unknown_model");
   });
 
-  test("parses JSON strings from JSONB fields", () => {
+  it("parses JSON strings from JSONB fields", () => {
     const row = parseBjsonFields(
       "workflowExecutions",
       {
@@ -116,7 +110,7 @@ describe("postgres-adapter", () => {
     });
   });
 
-  test("maps logical fields in SQL and returns logical JSONB fields", async () => {
+  it("maps logical fields in SQL and returns logical JSONB fields", async () => {
     const mockQuery = vi.fn().mockResolvedValue({
       rows: [{ workflow_name: "example", workflow_context: '{"active":true}' }],
       rowCount: 1,
@@ -163,7 +157,7 @@ describe("postgres-adapter", () => {
     expect(result).toEqual({ name: "example", context: { active: true } });
   });
 
-  test("serializes JSONB fields while inserting", async () => {
+  it("serializes JSONB fields while inserting", async () => {
     const mockQuery = vi.fn().mockResolvedValue({
       rows: [{ workflow_id: "id-1", workflow_context: { active: true } }],
       rowCount: 1,
@@ -204,8 +198,8 @@ describe("postgres-adapter", () => {
     });
 
     expect(mockQuery).toHaveBeenCalledWith(
-      'INSERT INTO "workflow_records" ("workflow_context") VALUES ($1) RETURNING "workflow_id" AS "id", "workflow_context" AS "context"',
-      ['{"active":true}'],
+      'INSERT INTO "workflow_records" ("workflow_context", "workflow_name") VALUES ($1, $2) RETURNING "workflow_id" AS "id", "workflow_context" AS "context"',
+      ['{"active":true}', "test-workflow"],
     );
     expect(result).toEqual({ id: "id-1", context: { active: true } });
   });
