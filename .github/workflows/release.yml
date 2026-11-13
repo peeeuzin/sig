@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish to Hex.pm
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: hex
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "28"
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Check that the tag matches the version in mix.exs
+        run: |
+          version="$(mix run --no-start --no-compile -e 'IO.puts(Mix.Project.config()[:version])' | tail -n 1)"
+          tag="${GITHUB_REF_NAME#v}"
+
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in mix.exs"
+            exit 1
+          fi
+
+      - name: Publish package and docs
+        run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}

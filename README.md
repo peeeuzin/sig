@@ -308,3 +308,7 @@ mix test
 ```
 
 The test suite uses [Testcontainers](https://github.com/testcontainers/testcontainers-elixir) to start throwaway PostgreSQL and Redis containers automatically, so the only requirement is a running Docker daemon. You don't need a local Postgres or Redis.
+
+## 📄 License
+
+Sig is released under the [MIT License](LICENSE).
