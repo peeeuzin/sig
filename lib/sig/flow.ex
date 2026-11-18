@@ -17,8 +17,9 @@ defmodule Sig.Flow do
       {:ok, workflow} = Sig.create_workflow(flow)
 
   Nodes without a dependency between them (`send_welcome` and `track` above)
-  can run in parallel when the execution is started with `async: true` and
-  the BullMQ worker has a concurrency greater than one.
+  run in parallel when the execution is started asynchronously (the default)
+  and there is more than one BullMQ worker slot (several workers, or a
+  concurrency greater than one).
 
   ## Node definitions
 

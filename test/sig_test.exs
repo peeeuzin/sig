@@ -115,7 +115,8 @@ defmodule SigTest do
                Sig.run_execution(
                  workflow.id,
                  %{"a" => 2, "b" => 3},
-                 %{"execution_tag" => "v1"}
+                 %{"execution_tag" => "v1"},
+                 sync: true
                )
 
       assert execution.status == "completed"
@@ -141,7 +142,7 @@ defmodule SigTest do
 
       {:ok, workflow} = Sig.create_workflow(flow)
 
-      assert {:ok, execution} = Sig.run_execution(workflow.id)
+      assert {:ok, execution} = Sig.run_execution(workflow.id, %{}, %{}, sync: true)
       assert execution.status == "completed"
       assert execution.node_results["flaky"]["status"] == "recovered_on_attempt_2"
 
@@ -158,7 +159,9 @@ defmodule SigTest do
 
       {:ok, workflow} = Sig.create_workflow(flow)
 
-      assert {:error, "permanent failure", execution} = Sig.run_execution(workflow.id)
+      assert {:error, "permanent failure", execution} =
+               Sig.run_execution(workflow.id, %{}, %{}, sync: true)
+
       assert execution.status == "failed"
 
       node_exec = Sig.Repo.get_by(Sig.Schemas.NodeExecution, workflow_execution_id: execution.id)
@@ -182,13 +185,13 @@ defmodule SigTest do
         )
 
       {:ok, workflow} = Sig.create_workflow(flow)
-      {:ok, execution} = Sig.run_execution(workflow.id)
+      {:ok, execution} = Sig.run_execution(workflow.id, %{}, %{}, sync: true)
 
       assert execution.status == "completed"
       assert CountingNode.get_count() == 1
 
       # Running execute_sync again on the execution should not re-run step1
-      {:ok, re_run} = Sig.start_execution(execution.id)
+      {:ok, re_run} = Sig.start_execution(execution.id, sync: true)
       assert re_run.status == "completed"
       assert CountingNode.get_count() == 1
     end
@@ -217,7 +220,7 @@ defmodule SigTest do
       assert {:error, :execution_suspended} = Sig.Engine.execute_sync(execution.id)
 
       # Resume execution
-      assert {:ok, resumed_exec} = Sig.resume_execution(execution.id)
+      assert {:ok, resumed_exec} = Sig.resume_execution(execution.id, sync: true)
       assert resumed_exec.status == "completed"
       assert resumed_exec.node_results["step2"]["total"] == 60
     end
@@ -261,7 +264,7 @@ defmodule SigTest do
       assert resumed_wf.status == "active"
 
       # Now executions can be resumed/run
-      assert {:ok, completed} = Sig.resume_execution(execution.id)
+      assert {:ok, completed} = Sig.resume_execution(execution.id, sync: true)
       assert completed.status == "completed"
     end
 
@@ -311,7 +314,7 @@ defmodule SigTest do
       {:ok, execution} = Sig.create_execution(workflow.id)
 
       # Start execution asynchronously with BullMQ
-      assert {:ok, _} = Sig.start_execution(execution.id, async: true)
+      assert {:ok, _} = Sig.start_execution(execution.id)
 
       # Poll briefly until BullMQ worker completes the workflow
       completed_exec =

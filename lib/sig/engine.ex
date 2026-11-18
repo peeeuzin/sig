@@ -31,6 +31,27 @@ defmodule Sig.Engine do
   Before running a node, the engine checks whether it already completed in
   this execution (in `node_results` or in its `NodeExecution` record). If so,
   the stored result is reused and the node is not run again.
+
+  ## Concurrency and leases
+
+  Several workers (or a worker and a synchronous caller) may try to run the
+  same node at the same time. Before running a node, the engine atomically
+  claims its `NodeExecution` record. Only one claimer wins; the others get
+  `{:error, :node_already_running}` and must not run the node.
+
+  While a node runs, the claim is kept alive by a heartbeat that touches the
+  record's `updated_at`. If the process running the node dies (for example,
+  the machine crashes), the heartbeat stops and, once the lease expires, the
+  node can be claimed again by another worker. The lease is configured with:
+
+      config :sig, node_lease_ms: 30_000
+
+  It defaults to 30 seconds, matching BullMQ's default lock duration, so a
+  stalled job retried by BullMQ can take the node over. The heartbeat runs
+  every third of the lease.
+
+  Because a crashed node is retried, a node may run more than once: nodes
+  with side effects should be idempotent.
   """
 
   alias Sig.Repo
@@ -39,6 +60,21 @@ defmodule Sig.Engine do
   alias Sig.Serializer
 
   import Ecto.Query
+
+  @default_lease_ms 30_000
+
+  # A node in one of these states can be claimed right away.
+  @claimable_statuses ["pending", "failed"]
+  # A node in one of these states is owned by whoever claimed it, until its
+  # lease expires.
+  @leased_statuses ["running", "retrying"]
+
+  @doc """
+  Returns the node lease duration in milliseconds (config `:node_lease_ms`,
+  default #{@default_lease_ms}). See "Concurrency and leases" above.
+  """
+  @spec lease_ms() :: pos_integer()
+  def lease_ms, do: Application.get_env(:sig, :node_lease_ms, @default_lease_ms)
 
   @doc """
   Runs an execution in the calling process until it completes, fails, is
@@ -72,6 +108,8 @@ defmodule Sig.Engine do
     * `{:error, :execution_suspended}` / `{:error, :execution_stopped}`
     * `{:error, {:execution_already_finished, status}}`
     * `{:error, {:node_not_found, node_name}}`
+    * `{:error, :node_already_running}` - another process holds the node's
+      lease; the node was not run. Try again later.
     * `{:error, reason}` - the node failed on its last attempt.
   """
   @spec execute_node(String.t(), String.t() | atom()) :: {:ok, term()} | {:error, term()}
@@ -220,6 +258,11 @@ defmodule Sig.Engine do
             {:ok, _result} ->
               {:cont, :ok}
 
+            {:error, :node_already_running} ->
+              # Another process is running this node; leave the execution
+              # as it is instead of failing it.
+              {:halt, {:error, :node_already_running, fresh_exec}}
+
             {:error, reason} ->
               # Node failed and ran out of retries -> fail execution
               now = DateTime.utc_now()
@@ -258,22 +301,100 @@ defmodule Sig.Engine do
       node_exec =
         get_or_create_node_execution(execution.id, node_name, module, max_retries, node_def)
 
-      # If node execution is already completed (check DB record)
-      if node_exec.status == "completed" do
-        sync_result_to_execution(execution.id, node_name, node_exec.result)
-        {:ok, node_exec.result}
-      else
-        attempt_node_execution(
-          execution,
-          node_exec,
-          node_name,
-          node_def,
-          1,
-          max_retries,
-          backoff_ms
-        )
+      # 2. Claim the node, so that no other worker runs it concurrently.
+      case claim_node_execution(node_exec) do
+        {:completed, result} ->
+          sync_result_to_execution(execution.id, node_name, result)
+          {:ok, result}
+
+        :locked ->
+          {:error, :node_already_running}
+
+        {:ok, claimed} ->
+          heartbeat = start_heartbeat(claimed.id)
+
+          try do
+            attempt_node_execution(
+              execution,
+              claimed,
+              node_name,
+              node_def,
+              1,
+              max_retries,
+              backoff_ms
+            )
+          after
+            stop_heartbeat(heartbeat)
+          end
       end
     end
+  end
+
+  # Atomically moves the node to "running" if it is free: never claimed,
+  # failed before, or owned by someone whose lease expired.
+  defp claim_node_execution(%NodeExecution{status: "completed", result: result}),
+    do: {:completed, result}
+
+  defp claim_node_execution(%NodeExecution{id: id}) do
+    now = DateTime.utc_now()
+    stale_before = DateTime.add(now, -lease_ms(), :millisecond)
+
+    query =
+      from(n in NodeExecution,
+        where: n.id == ^id,
+        where:
+          n.status in ^@claimable_statuses or
+            (n.status in ^@leased_statuses and n.updated_at < ^stale_before),
+        select: n
+      )
+
+    case Repo.update_all(query, set: [status: "running", updated_at: now]) do
+      {1, [claimed]} ->
+        {:ok, claimed}
+
+      {0, _} ->
+        case Repo.get(NodeExecution, id) do
+          %NodeExecution{status: "completed", result: result} -> {:completed, result}
+          _ -> :locked
+        end
+    end
+  end
+
+  # Keeps the claim alive while the node runs (including retry backoffs).
+  # The heartbeat stops on its own if the owner process dies.
+  defp start_heartbeat(node_exec_id) do
+    owner = self()
+    callers = [owner | Process.get(:"$callers", [])]
+    interval = max(div(lease_ms(), 3), 10)
+
+    spawn(fn ->
+      # Lets the SQL sandbox allow this process in tests.
+      Process.put(:"$callers", callers)
+      ref = Process.monitor(owner)
+      heartbeat_loop(node_exec_id, ref, interval)
+    end)
+  end
+
+  defp stop_heartbeat(pid), do: send(pid, :stop)
+
+  defp heartbeat_loop(node_exec_id, ref, interval) do
+    receive do
+      :stop -> :ok
+      {:DOWN, ^ref, :process, _, _} -> :ok
+    after
+      interval ->
+        touch_node_execution(node_exec_id)
+        heartbeat_loop(node_exec_id, ref, interval)
+    end
+  end
+
+  defp touch_node_execution(node_exec_id) do
+    from(n in NodeExecution, where: n.id == ^node_exec_id and n.status in ^@leased_statuses)
+    |> Repo.update_all(set: [updated_at: DateTime.utc_now()])
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   defp attempt_node_execution(
@@ -420,7 +541,8 @@ defmodule Sig.Engine do
         |> Repo.one!()
 
       current_results = exec.node_results || %{}
-      updated_results = Map.put(current_results, node_name, wrapped_result)
+      # The first result recorded wins, in case a node ran more than once.
+      updated_results = Map.put_new(current_results, node_name, wrapped_result)
 
       exec
       |> WorkflowExecution.changeset(%{node_results: updated_results})
@@ -453,6 +575,60 @@ defmodule Sig.Engine do
             {:ok, execution}
         end
     end
+  end
+
+  # ============================================================================
+  # Asynchronous execution helpers
+  # ============================================================================
+
+  @doc """
+  Validates that an execution can be started asynchronously and marks it as
+  `running`. Used by `Sig.start_execution/2`; it does not enqueue anything.
+
+  ## Errors
+
+    * `{:error, :not_found}`
+    * `{:error, :workflow_suspended}` / `{:error, :workflow_stopped}`
+    * `{:error, :execution_suspended}` / `{:error, :execution_stopped}`
+    * `{:error, {:execution_already_finished, status}}`
+  """
+  @spec mark_started(String.t()) :: {:ok, WorkflowExecution.t()} | {:error, term()}
+  def mark_started(execution_id) do
+    with {:ok, execution} <- get_and_validate_execution(execution_id) do
+      case execution.status do
+        status when status in ["completed", "failed"] ->
+          {:error, {:execution_already_finished, status}}
+
+        _ ->
+          now = DateTime.utc_now()
+
+          execution
+          |> WorkflowExecution.status_changeset("running", %{
+            started_at: execution.started_at || now
+          })
+          |> Repo.update()
+      end
+    end
+  end
+
+  @doc """
+  Marks an execution as `completed`, unless it is no longer `pending` or
+  `running` (for example, it was suspended or stopped meanwhile).
+
+  Safe to call from several workers at once. Returns `true` if this call
+  completed the execution.
+  """
+  @spec complete_execution(String.t()) :: boolean()
+  def complete_execution(execution_id) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      from(e in WorkflowExecution,
+        where: e.id == ^execution_id and e.status in ["pending", "running"]
+      )
+      |> Repo.update_all(set: [status: "completed", completed_at: now, updated_at: now])
+
+    count == 1
   end
 
   # ============================================================================

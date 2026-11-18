@@ -52,7 +52,7 @@ defmodule SigAdvancedTest do
         |> Sig.Flow.add_node(:step_d, StepD, depends_on: [:step_b, :step_c])
 
       {:ok, workflow} = Sig.create_workflow(flow)
-      {:ok, execution} = Sig.run_execution(workflow.id)
+      {:ok, execution} = Sig.run_execution(workflow.id, %{}, %{}, sync: true)
 
       assert execution.status == "completed"
       # step_a: 10
@@ -73,7 +73,7 @@ defmodule SigAdvancedTest do
         |> Sig.Flow.add_node(:raising, RaisingNode, max_retries: 2, backoff_ms: 10)
 
       {:ok, workflow} = Sig.create_workflow(flow)
-      {:error, reason, execution} = Sig.run_execution(workflow.id)
+      {:error, reason, execution} = Sig.run_execution(workflow.id, %{}, %{}, sync: true)
 
       assert execution.status == "failed"
       assert reason.exception =~ "simulated exception"

@@ -27,38 +27,67 @@ defmodule Sig.BullMQ.Queue do
   def connection, do: Application.get_env(:sig, :bullmq_connection, @redis_conn)
 
   @doc """
-  Enqueues every node of an execution that is currently ready to run.
+  Advances an execution: enqueues every node that is currently ready to run,
+  or marks the execution as `completed` when every node is done.
 
-  Returns `{:ok, count}` with the number of enqueued nodes, or
-  `{:error, :not_found}`.
+  Does nothing for executions that are not `pending` or `running`, or whose
+  workflow is not `active`. Safe to call several times and from several
+  workers at once: nodes that are already queued or running are not
+  enqueued twice (see `enqueue_node/3`).
+
+  Returns `{:ok, count}` with the number of nodes passed to BullMQ,
+  `{:error, :not_found}`, or `{:error, reason}` if Redis rejected a job.
   """
-  @spec enqueue_execution(String.t()) :: {:ok, non_neg_integer()} | {:error, :not_found}
+  @spec enqueue_execution(String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :not_found} | {:error, term()}
   def enqueue_execution(execution_id) do
     execution =
       WorkflowExecution
       |> Repo.get(execution_id)
       |> Repo.preload(:workflow)
 
-    if execution do
-      completed_names = Map.keys(execution.node_results || %{})
-      runnable = Sig.Flow.find_runnable_nodes(execution.workflow.nodes, completed_names)
+    cond do
+      is_nil(execution) ->
+        {:error, :not_found}
 
-      Enum.each(runnable, fn {node_name, _node_def} ->
-        enqueue_node(execution.id, node_name)
-      end)
+      execution.status not in ["pending", "running"] or execution.workflow.status != "active" ->
+        {:ok, 0}
 
-      {:ok, length(runnable)}
-    else
-      {:error, :not_found}
+      true ->
+        nodes = execution.workflow.nodes
+        completed_names = Map.keys(execution.node_results || %{})
+
+        if Enum.all?(Map.keys(nodes), &(&1 in completed_names)) do
+          Sig.Engine.complete_execution(execution.id)
+          {:ok, 0}
+        else
+          nodes
+          |> Sig.Flow.find_runnable_nodes(completed_names)
+          |> enqueue_all(execution.id)
+        end
     end
+  end
+
+  defp enqueue_all(runnable, execution_id) do
+    Enum.reduce_while(runnable, {:ok, 0}, fn {node_name, _node_def}, {:ok, count} ->
+      case enqueue_node(execution_id, node_name) do
+        {:ok, _job} -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   @doc """
   Enqueues a single node of an execution.
 
-  The job ID is `"<execution_id>:<node_name>"`, so enqueuing the same node
-  twice does not create a duplicate job. `opts` are passed to
-  `BullMQ.Queue.add/4` and override the defaults.
+  The job ID is `"<execution_id>:<node_name>"`, so while a job for that node
+  is waiting, delayed or running, enqueuing it again does not create a
+  duplicate. Once a job finishes it must be removed from Redis, or BullMQ
+  would ignore the node when it has to be enqueued again, for example when
+  an execution is resumed. The worker does that (see
+  `Sig.BullMQ.Worker.worker_opts/0`); the job options ask for it too.
+
+  `opts` are passed to `BullMQ.Queue.add/4` and override the defaults.
   """
   @spec enqueue_node(String.t(), String.t() | atom(), keyword()) ::
           {:ok, term()} | {:error, term()}
@@ -73,7 +102,9 @@ defmodule Sig.BullMQ.Queue do
     job_opts =
       [
         connection: connection(),
-        job_id: job_id
+        job_id: job_id,
+        remove_on_complete: true,
+        remove_on_fail: true
       ]
       |> Keyword.merge(opts)
 

@@ -5,8 +5,8 @@ defmodule Sig do
   Sig runs workflows defined as a Directed Acyclic Graph (DAG) of nodes. Each
   node is a module implementing `Sig.Node`. Workflows and their executions are
   persisted in PostgreSQL through your application's Ecto repo, and executions
-  can run either inline (synchronously) or distributed across workers through
-  BullMQ (Redis).
+  run distributed across workers through BullMQ (Redis) by default, or inline
+  (synchronously) with `sync: true`.
 
   ## Setup
 
@@ -15,6 +15,18 @@ defmodule Sig do
 
   and create Sig's tables with a migration that calls `Sig.Migration.up/1`.
   See the README for the full installation guide.
+
+  ## Asynchronous by default
+
+  `start_execution/2`, `run_execution/4` and `resume_execution/2` only enqueue
+  the execution's runnable nodes and return right away, with the execution
+  `running`. `Sig.BullMQ.Supervisor` workers, on this or other machines, run
+  the nodes. That means the process starting executions doesn't need the
+  node modules, which allows master / worker deployments (see
+  `Sig.BullMQ.Supervisor`).
+
+  Pass `sync: true` to run the execution in the calling process instead, and
+  return once it reaches a final state.
 
   ## Concepts
 
@@ -55,10 +67,12 @@ defmodule Sig do
         )
 
       {:ok, workflow} = Sig.create_workflow(flow)
-      {:ok, execution} = Sig.run_execution(workflow, %{"user_id" => 10})
 
-      execution.status
-      #=> "completed"
+      # Enqueued for the BullMQ workers:
+      {:ok, %{status: "running"}} = Sig.run_execution(workflow, %{"user_id" => 10})
+
+      # Or run inline:
+      {:ok, %{status: "completed"}} = Sig.run_execution(workflow, %{"user_id" => 10}, %{}, sync: true)
 
   ## Return values
 
@@ -353,47 +367,62 @@ defmodule Sig do
   @doc """
   Starts an execution.
 
+  By default the execution is started asynchronously: it is marked as
+  `running`, its runnable nodes are enqueued to BullMQ and the function
+  returns right away. `Sig.BullMQ.Supervisor` workers (on this or any other
+  machine) run the nodes. Starting an execution that is already `running`
+  enqueues its runnable nodes again, which is harmless.
+
   ## Options
 
-    * `:async` - when `false` (the default), runs the execution in the calling
-      process with `Sig.Engine.execute_sync/1` and returns once it reaches a
-      final state (or is suspended/stopped). When `true`, marks the execution
-      as `running`, enqueues its runnable nodes to BullMQ and returns
-      immediately; `Sig.BullMQ.Supervisor` must be running for the jobs to be
-      processed.
+    * `:sync` - when `true`, runs the execution in the calling process with
+      `Sig.Engine.execute_sync/1` and returns once it completes, fails, or is
+      suspended or stopped. Defaults to `false`.
+
+  ## Errors
+
+  Asynchronous starts return:
+
+    * `{:error, :not_found}`
+    * `{:error, :workflow_suspended}` / `{:error, :workflow_stopped}`
+    * `{:error, :execution_suspended}` / `{:error, :execution_stopped}` -
+      use `resume_execution/2` for suspended executions.
+    * `{:error, {:execution_already_finished, status}}`
+    * `{:error, reason}` - Redis rejected a job. The execution stays
+      `running`; call `start_execution/2` again to retry.
+
+  Synchronous starts return the same lookup and state errors, and
+  `{:error, reason, execution}` when the execution fails.
 
   ## Examples
 
-      {:ok, %{status: "completed"}} = Sig.start_execution(execution)
+      {:ok, %{status: "running"}} = Sig.start_execution(execution)
 
-      {:ok, %{status: "running"}} = Sig.start_execution(execution, async: true)
+      {:ok, %{status: "completed"}} = Sig.start_execution(execution, sync: true)
   """
   @spec start_execution(execution_ref(), keyword()) ::
-          {:ok, WorkflowExecution.t()} | {:error, term()}
+          {:ok, WorkflowExecution.t()}
+          | {:error, term()}
+          | {:error, term(), WorkflowExecution.t()}
   def start_execution(execution_or_id, opts \\ []) do
+    validate_start_opts!(opts)
     execution_id = get_id(execution_or_id)
-    async? = Keyword.get(opts, :async, false)
 
-    if async? do
-      execution = Repo.get!(WorkflowExecution, execution_id)
-      now = DateTime.utc_now()
-
-      {:ok, _running_exec} =
-        execution
-        |> WorkflowExecution.status_changeset("running", %{
-          started_at: execution.started_at || now
-        })
-        |> Repo.update()
-
-      case BullMQQueue.enqueue_execution(execution_id) do
-        {:ok, _count} ->
-          {:ok, get_execution(execution_id)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
+    if Keyword.get(opts, :sync, false) do
       Engine.execute_sync(execution_id)
+    else
+      with {:ok, execution} <- Engine.mark_started(execution_id),
+           {:ok, _count} <- BullMQQueue.enqueue_execution(execution.id) do
+        {:ok, get_execution(execution.id)}
+      end
+    end
+  end
+
+  defp validate_start_opts!(opts) do
+    if Keyword.has_key?(opts, :async) do
+      raise ArgumentError,
+            "the :async option was removed: executions are asynchronous by default, " <>
+              "pass sync: true to run them in the calling process"
     end
   end
 
@@ -401,21 +430,26 @@ defmodule Sig do
   Creates an execution and starts it right away.
 
   Equivalent to `create_execution/4` followed by `start_execution/2`. Accepts
-  the options of both functions (`:idempotency_key` and `:async`).
+  the options of both functions (`:idempotency_key` and `:sync`). Like
+  `start_execution/2`, it is asynchronous unless `sync: true` is given.
 
   ## Examples
 
       {:ok, execution} = Sig.run_execution(workflow, %{"input" => "hello"}, %{"auth" => token})
 
-      {:ok, execution} =
+      {:ok, %{status: "completed"}} =
         Sig.run_execution(workflow, %{"order_id" => 1}, %{},
           idempotency_key: "order-1",
-          async: true
+          sync: true
         )
   """
   @spec run_execution(workflow_ref(), map(), map(), keyword()) ::
-          {:ok, WorkflowExecution.t()} | {:error, term()}
+          {:ok, WorkflowExecution.t()}
+          | {:error, term()}
+          | {:error, term(), WorkflowExecution.t()}
   def run_execution(workflow_or_id, execution_params \\ %{}, execution_context \\ %{}, opts \\ []) do
+    validate_start_opts!(opts)
+
     with {:ok, execution} <-
            create_execution(workflow_or_id, execution_params, execution_context, opts) do
       start_execution(execution, opts)
@@ -513,11 +547,12 @@ defmodule Sig do
   Resumes a suspended execution from where it stopped.
 
   Nodes that already completed are not run again; only the remaining nodes
-  are dispatched.
+  are dispatched. Like `start_execution/2`, the remaining nodes are enqueued
+  to BullMQ unless `sync: true` is given.
 
   ## Options
 
-    * `:async` - same as in `start_execution/2`. Defaults to `false`.
+    * `:sync` - same as in `start_execution/2`. Defaults to `false`.
 
   ## Errors
 
@@ -527,8 +562,11 @@ defmodule Sig do
       `suspended`.
   """
   @spec resume_execution(execution_ref(), keyword()) ::
-          {:ok, WorkflowExecution.t()} | {:error, term()}
+          {:ok, WorkflowExecution.t()}
+          | {:error, term()}
+          | {:error, term(), WorkflowExecution.t()}
   def resume_execution(execution_or_id, opts \\ []) do
+    validate_start_opts!(opts)
     id = get_id(execution_or_id)
 
     with {:ok, execution} <- Engine.resume_execution(id) do

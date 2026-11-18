@@ -104,9 +104,11 @@ pool, its writes take part in your transactions (`MyApp.Repo.transaction/1`),
 and in tests it uses the same SQL sandbox as the rest of your app, so your
 existing `DataCase` works as is.
 
-### 4. Start the BullMQ worker (optional)
+### 4. Start the BullMQ supervisor
 
-Only needed to run executions with `async: true`. Configure Redis:
+Executions are **asynchronous by default**: starting one enqueues its nodes to
+BullMQ, and workers run them. Pass `sync: true` to run an execution inline
+instead (no Redis needed). Configure Redis:
 
 ```elixir
 # config/dev.exs
@@ -130,12 +132,37 @@ children = [
 ]
 ```
 
-It accepts `:redis_url`, `:queue_name` and `:concurrency` options, e.g.
-`{Sig.BullMQ.Supervisor, concurrency: 10}`.
+It accepts `:worker`, `:redis_url`, `:queue_name`, `:concurrency` and
+`:worker_opts` options, e.g. `{Sig.BullMQ.Supervisor, concurrency: 10}`.
+
+#### Master / worker deployments
+
+Any number of machines can run workers on the same queue. Each job runs a
+single node, so independent branches run in parallel on different workers, and
+a node is never run by two workers at once (see "Concurrency and leases" in
+`Sig.Engine`).
+
+Machines that only create workflows and start, suspend, resume or stop
+executions (a "master") don't need the node modules. Start the supervisor
+there with `worker: false`, so it only opens the Redis connection, and
+reference node modules by name:
+
+```elixir
+# Master: enqueues only
+children = [MyApp.Repo, {Sig.BullMQ.Supervisor, worker: false}]
+
+Sig.Flow.new("payments")
+|> Sig.Flow.add_node(:charge, "MyApp.Nodes.Charge")
+
+# Workers: have the node modules and run them
+children = [MyApp.Repo, Sig.BullMQ.Supervisor]
+```
+
+Never pass `sync: true` on a master: it would run the nodes there.
 
 > In tests, BullMQ jobs run in the worker's processes, which do not own a
-> sandbox connection. Prefer synchronous executions (the default) in tests, or
-> put the sandbox in shared mode for tests that use `async: true`.
+> sandbox connection. Prefer `sync: true` in tests, or put the sandbox in
+> shared mode for tests that run executions asynchronously.
 
 ### 5. Trigger a workflow from your app
 
@@ -152,8 +179,7 @@ defmodule MyAppWeb.OrderController do
 
     {:ok, execution} =
       Sig.run_execution(workflow_id, %{"order_id" => order_id}, %{},
-        idempotency_key: "order-#{order_id}",
-        async: true
+        idempotency_key: "order-#{order_id}"
       )
 
     json(conn, %{execution_id: execution.id, status: execution.status})
@@ -239,13 +265,14 @@ Each execution has its own params and context:
 > with `params["key"]`, not `params[:key]`.
 
 ```elixir
-# Direct execution with run_execution
+# Inline execution with run_execution (sync: true)
 {:ok, execution} =
   Sig.run_execution(
     workflow.id,
     %{"user_id" => 10, "amount" => 40},     # Execution params
     %{"user_email" => "pedro@email.com"},  # Execution context
-    idempotency_key: "tx-order-001"    # Idempotency
+    idempotency_key: "tx-order-001",   # Idempotency
+    sync: true                         # Run in this process
   )
 
 IO.inspect(execution.status)
@@ -287,7 +314,7 @@ IO.inspect(execution.node_results)
 
 ### 5. Queue Execution with BullMQ (Distributed)
 
-To run asynchronously with BullMQ and Redis:
+Executions run asynchronously with BullMQ and Redis by default:
 
 ```elixir
 # Start the supervisor in your supervision tree, after your repo:
@@ -298,7 +325,8 @@ children = [
 
 # Trigger the asynchronous execution:
 {:ok, execution} = Sig.create_execution(workflow.id, %{"user_id" => 10})
-{:ok, execution} = Sig.start_execution(execution.id, async: true)
+{:ok, execution} = Sig.start_execution(execution.id)
+# => %{status: "running"}, the workers take it from here
 ```
 
 ### 6. Running Tests

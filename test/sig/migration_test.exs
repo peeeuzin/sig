@@ -79,7 +79,7 @@ defmodule Sig.MigrationTest do
       |> Sig.Flow.add_node(:add, Sig.TestNodes.AddNumbers, params: %{"a" => 1, "b" => 2})
 
     {:ok, workflow} = Sig.create_workflow(flow)
-    {:ok, execution} = Sig.run_execution(workflow)
+    {:ok, execution} = Sig.run_execution(workflow, %{}, %{}, sync: true)
 
     assert execution.status == "completed"
     assert execution.node_results["add"]["sum"] == 3
