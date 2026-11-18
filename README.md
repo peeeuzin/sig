@@ -41,7 +41,7 @@ and it reads and writes them through your app's Ecto repo.
 defp deps do
   [
     # ...
-    {:sig, "~> 0.1.0"}
+    {:sig, "~> 0.2.0"}
   ]
 end
 ```
